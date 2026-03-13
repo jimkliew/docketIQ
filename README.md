@@ -1,6 +1,6 @@
 # DocketIQ MVP
 
-`DocketIQ` is a dependency-free hackathon demo for public comment intelligence in federal rulemaking. It now opens with an educational walkthrough of how rulemaking works, what a docket contains, how human review happens today, and how an agent team can turn a large public comment record into a traceable knowledge graph and analyst-ready summary.
+`DocketIQ` is a dependency-free hackathon demo for public comment intelligence in federal rulemaking. It starts from a real docket ID, loads public rulemaking documents, triages sample comments with transparent AI scoring agents, visualizes topic clusters, and shows an auditable multi-agent review workflow.
 
 ## Run
 
@@ -13,6 +13,14 @@ python3 -m http.server 4173
 
 Then open `http://localhost:4173`.
 
+## Optional OpenAI key
+
+The app now includes an `OpenAI API key` field in the top-right header.
+
+- If a valid key is present, the Step 2 proposed-rule summary is generated with OpenAI from docket metadata and document context.
+- If no key is present, the app falls back to a local metadata summary.
+- The key is stored only in browser local storage for this demo.
+
 ## Verify
 
 ```bash
@@ -22,14 +30,20 @@ node scripts/verify.mjs
 
 ## Demo flow
 
-1. Start on `Overview`, `Timeline`, and `Docket` to explain rulemaking in plain English using the EPA lead and copper case study.
-2. Move to `Manual Review` to show the current human bottleneck and correct the “someone reads every comment the same way” misconception.
-3. Open `Agents at Work` to show the animated handoff workflow and transparent prompts/tools.
-4. Move to `Knowledge Graph` and `Analyst Summary` to show how comments become structured issues, arguments, and source-linked findings.
-5. Finish on `ROI` and `Sources` to connect the product back to government benefit and official public documentation.
+1. `Pick a Docket ID`
+   Load one of the sample public dockets and let the app fetch the docket snapshot automatically.
+2. `Docket Snapshot`
+   Show the proposed-rule summary and the actual public documents in the docket, including file-type icons and hover summaries.
+3. `Sample Public Comments`
+   Show the `Authority Agent` and `Sentiment Agent`, the topic-cluster map, interactive response filters, and the topic analysis view.
+4. `Agents at Work`
+   Show the city-map style agent workflow with visible handoffs, prompts, tools, recent history, and audit ledger.
+5. `Output`
+   Show the analyst-facing summary, knowledge graph preview, campaign concentration, and estimated time savings.
 
 ## Notes
 
 - The educational content is anchored to official public EPA, Federal Register, and Regulations.gov links.
 - The comment analysis dataset is synthetic and aligned to the real EPA lead and copper docket so the demo stays reliable and easy to explain.
-- The extraction layer is deterministic so the demo runs locally without external APIs, but the prompts and workflow are designed to be LLM-ready.
+- The extraction layer is still deterministic for the comment pipeline so the demo runs locally without requiring external APIs.
+- Step 2 summary generation is LLM-backed when a working OpenAI key is available.
