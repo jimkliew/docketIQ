@@ -1,0 +1,484 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>System Architecture - DocketIQ</title>
+  <link rel="stylesheet" href="./src/styles.css">
+  <style>
+    .architecture-page {
+      max-width: 1400px;
+      margin: 0 auto;
+      padding: 2rem;
+    }
+    .page-header {
+      text-align: center;
+      margin-bottom: 3rem;
+    }
+    .page-header h1 {
+      font-size: 3rem;
+      margin-bottom: 1rem;
+    }
+    .page-header p {
+      font-size: 1.2rem;
+      color: var(--ink-soft);
+    }
+    .back-link {
+      display: inline-block;
+      margin-bottom: 2rem;
+      color: var(--signal);
+      text-decoration: none;
+      font-weight: 600;
+    }
+    .back-link:hover {
+      text-decoration: underline;
+    }
+    .architecture-section {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 1rem;
+      padding: 2rem;
+      margin-bottom: 2rem;
+    }
+    .architecture-section h2 {
+      margin: 0 0 1rem 0;
+      color: var(--signal);
+      font-size: 1.8rem;
+    }
+    .flow-diagram {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 1.5rem;
+      margin: 2rem 0;
+      flex-wrap: wrap;
+    }
+    .flow-box {
+      background: var(--panel-alt);
+      border: 2px solid var(--line);
+      border-radius: 0.75rem;
+      padding: 1.5rem;
+      min-width: 200px;
+      text-align: center;
+    }
+    .flow-box strong {
+      display: block;
+      margin-bottom: 0.75rem;
+      color: var(--signal);
+      font-size: 1.1rem;
+    }
+    .flow-arrow {
+      font-size: 2rem;
+      color: var(--signal);
+      font-weight: bold;
+    }
+    .step-card {
+      background: var(--panel-alt);
+      border-left: 4px solid var(--signal);
+      padding: 1.5rem;
+      margin-bottom: 1.5rem;
+      border-radius: 0.5rem;
+    }
+    .step-card h3 {
+      margin: 0 0 1rem 0;
+      color: var(--signal);
+    }
+    .step-details {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 1.5rem;
+      margin-top: 1rem;
+    }
+    .step-detail-box {
+      background: var(--panel);
+      padding: 1rem;
+      border-radius: 0.5rem;
+      border: 1px solid var(--line);
+    }
+    .step-detail-box h4 {
+      margin: 0 0 0.75rem 0;
+      font-size: 1rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    .step-detail-box ul {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+    }
+    .step-detail-box li {
+      padding: 0.4rem 0;
+      color: var(--ink-soft);
+      line-height: 1.5;
+    }
+    .agent-badge {
+      display: inline-block;
+      padding: 0.3rem 0.75rem;
+      background: var(--signal-soft);
+      color: var(--signal);
+      border-radius: 1rem;
+      font-size: 0.85rem;
+      margin: 0.25rem;
+      border: 1px solid var(--signal);
+    }
+    .data-flow-full {
+      background: var(--panel-alt);
+      padding: 2rem;
+      border-radius: 1rem;
+      margin: 2rem 0;
+    }
+    .data-flow-full h3 {
+      margin: 0 0 1.5rem 0;
+      text-align: center;
+      color: var(--signal);
+    }
+  </style>
+</head>
+<body>
+  <div class="app-shell">
+    <div class="ambient ambient-a"></div>
+    <div class="ambient ambient-b"></div>
+    <main class="app-root architecture-page">
+      <a href="/" class="back-link">← Back to DocketIQ</a>
+
+      <div class="page-header">
+        <h1>📊 System Architecture</h1>
+        <p>How DocketIQ processes public comments using AI agents</p>
+      </div>
+
+      <!-- High-Level Overview -->
+      <div class="architecture-section">
+        <h2>System Overview</h2>
+        <p>DocketIQ is a multi-agent AI system that analyzes public comments on federal regulations. The system follows a three-step workflow:</p>
+
+        <div class="flow-diagram">
+          <div class="flow-box">
+            <strong>Step 1</strong>
+            <div>Docket Selection</div>
+            <div style="font-size: 0.85rem; color: var(--ink-soft); margin-top: 0.5rem;">User chooses a regulatory docket</div>
+          </div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-box">
+            <strong>Step 2</strong>
+            <div>Data Fetching</div>
+            <div style="font-size: 0.85rem; color: var(--ink-soft); margin-top: 0.5rem;">Retrieve documents & comments from Regulations.gov</div>
+          </div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-box">
+            <strong>Step 3</strong>
+            <div>AI Analysis</div>
+            <div style="font-size: 0.85rem; color: var(--ink-soft); margin-top: 0.5rem;">16 agents process and analyze data</div>
+          </div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-box">
+            <strong>Output</strong>
+            <div>Insights Dashboard</div>
+            <div style="font-size: 0.85rem; color: var(--ink-soft); margin-top: 0.5rem;">Topics, sentiment, campaigns, recommendations</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Step 1: Docket Selection -->
+      <div class="architecture-section">
+        <h2>Step 1: Docket Selection</h2>
+        <div class="step-card">
+          <h3>User selects a docket ID to begin analysis</h3>
+          <div class="step-details">
+            <div class="step-detail-box">
+              <h4>📥 Input</h4>
+              <ul>
+                <li>User selection from sample dockets</li>
+                <li>Custom docket ID entry</li>
+                <li>Data type indicators (real vs. simulated)</li>
+              </ul>
+            </div>
+            <div class="step-detail-box">
+              <h4>⚙️ Processing</h4>
+              <ul>
+                <li>Display docket options with badges</li>
+                <li>Validate docket ID format</li>
+                <li>Determine data source</li>
+                <li>Prepare API parameters</li>
+              </ul>
+            </div>
+            <div class="step-detail-box">
+              <h4>📤 Output</h4>
+              <ul>
+                <li>Selected docket ID</li>
+                <li>Data type flag</li>
+                <li>Transition to Step 2</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Step 2: Data Fetching -->
+      <div class="architecture-section">
+        <h2>Step 2: Data Fetching & Snapshot</h2>
+        <div class="step-card">
+          <h3>Retrieve docket metadata, documents, and public comments</h3>
+
+          <div style="margin: 1rem 0;">
+            <strong>Agents Used:</strong>
+            <span class="agent-badge">docket-fetcher</span>
+            <span class="agent-badge">document-fetcher</span>
+            <span class="agent-badge">comment-fetcher</span>
+            <span class="agent-badge">attachment-processor</span>
+          </div>
+
+          <div class="step-details">
+            <div class="step-detail-box">
+              <h4>📥 Input</h4>
+              <ul>
+                <li>Docket ID from Step 1</li>
+                <li>Regulations.gov API endpoint</li>
+                <li>API key (if configured)</li>
+              </ul>
+            </div>
+            <div class="step-detail-box">
+              <h4>⚙️ Processing</h4>
+              <ul>
+                <li>Fetch docket metadata (title, agency, dates)</li>
+                <li>Retrieve document list with attachments</li>
+                <li>Pull public comments (up to 250)</li>
+                <li>Parse attachment metadata</li>
+                <li>Validate and sanitize data</li>
+                <li>Handle zero-comment dockets</li>
+              </ul>
+            </div>
+            <div class="step-detail-box">
+              <h4>📤 Output</h4>
+              <ul>
+                <li>Docket metadata object</li>
+                <li>Document array (max 10 displayed)</li>
+                <li>Comment array with attachments</li>
+                <li>Visual snapshot UI</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Step 3: AI Analysis -->
+      <div class="architecture-section">
+        <h2>Step 3: AI-Powered Analysis</h2>
+        <div class="step-card">
+          <h3>Multi-agent processing pipeline analyzes comments</h3>
+
+          <div style="margin: 1rem 0;">
+            <strong>Agents Used:</strong>
+            <span class="agent-badge">comment-normalizer</span>
+            <span class="agent-badge">duplicate-detector</span>
+            <span class="agent-badge">topic-classifier</span>
+            <span class="agent-badge">argument-extractor</span>
+            <span class="agent-badge">entity-recognizer</span>
+            <span class="agent-badge">sentiment-scorer</span>
+            <span class="agent-badge">authority-scorer</span>
+            <span class="agent-badge">summary-generator</span>
+            <span class="agent-badge">timeline-analyzer</span>
+            <span class="agent-badge">fraud-detector</span>
+            <span class="agent-badge">plain-language-translator</span>
+          </div>
+
+          <div class="step-details">
+            <div class="step-detail-box">
+              <h4>📥 Input</h4>
+              <ul>
+                <li>Comment array from Step 2</li>
+                <li>Docket metadata</li>
+                <li>Topic registry</li>
+                <li>Configuration settings</li>
+              </ul>
+            </div>
+            <div class="step-detail-box">
+              <h4>⚙️ Processing</h4>
+              <ul>
+                <li>Normalize & clean comment text</li>
+                <li>Detect duplicate/campaign comments</li>
+                <li>Classify comments by topic</li>
+                <li>Extract arguments and evidence</li>
+                <li>Recognize stakeholder entities</li>
+                <li>Score sentiment & authority</li>
+                <li>Analyze submission timeline</li>
+                <li>Detect fraudulent patterns</li>
+                <li>Generate topic summaries</li>
+                <li>Build knowledge graphs</li>
+                <li>Create recommendations</li>
+              </ul>
+            </div>
+            <div class="step-detail-box">
+              <h4>📤 Output</h4>
+              <ul>
+                <li>Topic clusters with evidence</li>
+                <li>Sentiment distribution</li>
+                <li>Campaign groups & duplicates</li>
+                <li>Stakeholder breakdown</li>
+                <li>Timeline with surge detection</li>
+                <li>Fraud alerts</li>
+                <li>Knowledge graphs</li>
+                <li>Analyst recommendations</li>
+                <li>ROI estimates</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Data Flow Diagram -->
+      <div class="architecture-section">
+        <h2>Complete Data Flow</h2>
+        <div class="data-flow-full">
+          <h3>End-to-End Processing Pipeline</h3>
+          <pre style="background: var(--panel); padding: 1.5rem; border-radius: 0.5rem; overflow-x: auto; font-size: 0.85rem; line-height: 1.8;">
+User Input (Docket ID)
+    ↓
+<span style="color: #8b5cf6;">┌─────────────────────────────────────────────┐</span>
+<span style="color: #8b5cf6;">│ EXTRACTION AGENTS (Data Fetching)          │</span>
+<span style="color: #8b5cf6;">├─────────────────────────────────────────────┤</span>
+<span style="color: #8b5cf6;">│ • docket-fetcher → Regulations.gov API     │</span>
+<span style="color: #8b5cf6;">│ • document-fetcher → Fetch docs list       │</span>
+<span style="color: #8b5cf6;">│ • comment-fetcher → Pull comments          │</span>
+<span style="color: #8b5cf6;">│ • attachment-processor → Parse metadata    │</span>
+<span style="color: #8b5cf6;">└─────────────────────────────────────────────┘</span>
+    ↓
+Raw Data (Docket + Documents + Comments)
+    ↓
+<span style="color: #6366f1;">┌─────────────────────────────────────────────┐</span>
+<span style="color: #6366f1;">│ ENRICHMENT AGENTS (Data Processing)        │</span>
+<span style="color: #6366f1;">├─────────────────────────────────────────────┤</span>
+<span style="color: #6366f1;">│ • comment-normalizer → Clean text          │</span>
+<span style="color: #6366f1;">│ • duplicate-detector → MinHash similarity  │</span>
+<span style="color: #6366f1;">│ • topic-classifier → Assign topics         │</span>
+<span style="color: #6366f1;">│ • argument-extractor → Extract claims      │</span>
+<span style="color: #6366f1;">│ • entity-recognizer → Identify entities    │</span>
+<span style="color: #6366f1;">│ • timeline-analyzer → Detect surges        │</span>
+<span style="color: #6366f1;">└─────────────────────────────────────────────┘</span>
+    ↓
+Enriched Comment Data
+    ↓
+<span style="color: #10b981;">┌─────────────────────────────────────────────┐</span>
+<span style="color: #10b981;">│ SCORING AGENTS (Analysis & Metrics)        │</span>
+<span style="color: #10b981;">├─────────────────────────────────────────────┤</span>
+<span style="color: #10b981;">│ • sentiment-scorer → Analyze sentiment     │</span>
+<span style="color: #10b981;">│ • authority-scorer → Measure expertise     │</span>
+<span style="color: #10b981;">│ • fraud-detector → Identify suspicious     │</span>
+<span style="color: #10b981;">└─────────────────────────────────────────────┘</span>
+    ↓
+Scored & Analyzed Data
+    ↓
+<span style="color: #f97316;">┌─────────────────────────────────────────────┐</span>
+<span style="color: #f97316;">│ ACTION AGENTS (Insights Generation)        │</span>
+<span style="color: #f97316;">├─────────────────────────────────────────────┤</span>
+<span style="color: #f97316;">│ • summary-generator → Create summaries     │</span>
+<span style="color: #f97316;">│ • graph-builder → Build knowledge graphs   │</span>
+<span style="color: #f97316;">│ • topic-view-builder → Generate views      │</span>
+<span style="color: #f97316;">│ • recommendation-engine → Analyst guidance │</span>
+<span style="color: #f97316;">│ • plain-language-translator → Simplify     │</span>
+<span style="color: #f97316;">│ • heatmap-generator → Visual analytics     │</span>
+<span style="color: #f97316;">└─────────────────────────────────────────────┘</span>
+    ↓
+Final Output (Dashboard with Insights)</pre>
+        </div>
+      </div>
+
+      <!-- Technical Stack -->
+      <div class="architecture-section">
+        <h2>Technical Stack</h2>
+        <div class="step-details">
+          <div class="step-detail-box">
+            <h4>🎨 Frontend</h4>
+            <ul>
+              <li>Vanilla JavaScript (ES6 modules)</li>
+              <li>HTML5 + CSS3</li>
+              <li>No framework dependencies</li>
+              <li>Real-time reactive rendering</li>
+            </ul>
+          </div>
+          <div class="step-detail-box">
+            <h4>🔌 APIs</h4>
+            <ul>
+              <li>Regulations.gov API v4</li>
+              <li>OpenAI GPT-4 (optional, for translation)</li>
+              <li>RESTful architecture</li>
+              <li>API key management via config.local.mjs</li>
+            </ul>
+          </div>
+          <div class="step-detail-box">
+            <h4>🧠 AI/ML Techniques</h4>
+            <ul>
+              <li>MinHash for duplicate detection</li>
+              <li>Jaccard similarity scoring</li>
+              <li>TF-IDF for topic classification</li>
+              <li>Pattern matching for entities</li>
+              <li>Statistical time-series analysis</li>
+              <li>LLM integration (GPT-4)</li>
+            </ul>
+          </div>
+          <div class="step-detail-box">
+            <h4>📊 Data Processing</h4>
+            <ul>
+              <li>Multi-stage pipeline architecture</li>
+              <li>Defensive programming with validation</li>
+              <li>Null-safe data handling</li>
+              <li>Comprehensive audit logging</li>
+              <li>Performance optimization</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+
+      <!-- Transparency & Audit -->
+      <div class="architecture-section">
+        <h2>Transparency & Human Oversight</h2>
+        <p style="margin-bottom: 1.5rem;">DocketIQ is designed with transparency and human oversight as core principles:</p>
+
+        <div class="step-details">
+          <div class="step-detail-box">
+            <h4>📋 Audit Trail</h4>
+            <ul>
+              <li>Every agent action logged</li>
+              <li>API calls tracked</li>
+              <li>Data transformations recorded</li>
+              <li>Exportable JSON logs</li>
+              <li>Three detail levels (Summary, Details, Full)</li>
+            </ul>
+          </div>
+          <div class="step-detail-box">
+            <h4>🤖 Agent Transparency</h4>
+            <ul>
+              <li>Full system prompts visible</li>
+              <li>Explicit capability lists</li>
+              <li>Clear limitation statements</li>
+              <li>Implementation details exposed</li>
+              <li>Call graphs showing agent interactions</li>
+            </ul>
+          </div>
+          <div class="step-detail-box">
+            <h4>👤 Human Oversight</h4>
+            <ul>
+              <li>AI assists, humans decide</li>
+              <li>Source attribution for all insights</li>
+              <li>Clickable evidence trails</li>
+              <li>Manual verification encouraged</li>
+              <li>Recommendations, not directives</li>
+            </ul>
+          </div>
+          <div class="step-detail-box">
+            <h4>⚠️ Limitations Disclosure</h4>
+            <ul>
+              <li>Each agent lists what it CANNOT do</li>
+              <li>No black-box AI claims</li>
+              <li>Accuracy expectations set</li>
+              <li>Edge cases acknowledged</li>
+              <li>Continuous improvement tracked</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+
+    </main>
+  </div>
+</body>
+</html>

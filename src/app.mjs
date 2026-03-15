@@ -8,9 +8,31 @@ import {
   SAMPLE_DOCKETS,
 } from "./data.mjs";
 import { runPipeline } from "./pipeline.mjs";
+import {
+  AGENT_REGISTRY,
+  AGENT_TYPES,
+  getAgentColor,
+  getAgentById,
+  getAgentsByType,
+  getCallers,
+  getCallees,
+} from "./agents.mjs";
+import { auditLogger } from "./audit.mjs";
+
+// Import configuration (tries local first, falls back to template)
+let config;
+try {
+  // Try to load local config with real API keys (gitignored)
+  config = (await import("./config.local.mjs")).default;
+  console.log("✅ Using config.local.mjs (local development mode)");
+} catch {
+  // Fall back to template config with DEMO_KEY (safe to commit)
+  config = (await import("./config.mjs")).default;
+  console.log("⚠️ Using config.mjs template - create config.local.mjs for real API keys");
+}
 
 const API_BASE = "https://api.regulations.gov/v4";
-const API_KEY = "DEMO_KEY";
+const API_KEY = config.REGULATIONS_GOV_API_KEY;
 const OPENAI_API_BASE = "https://api.openai.com/v1";
 
 const state = {
@@ -40,6 +62,12 @@ const state = {
   expandedComments: new Set(),
   agentTick: 0,
   reducedMotion: window.matchMedia("(prefers-reduced-motion: reduce)").matches,
+  // Transparency panels
+  showAgentsPanel: false,
+  showArchitecturePanel: false,
+  showAuditPanel: false,
+  selectedTransparencyAgent: null,
+  auditDepthLevel: 0, // 0=summary, 1=details, 2=full data
 };
 
 const app = document.querySelector("#app");
@@ -49,9 +77,7 @@ let apiKeyValidationTimer = null;
 const STEPS = [
   "Pick a Docket ID",
   "Docket Snapshot",
-  "Sample Comments",
-  "Agents at Work",
-  "Output",
+  "Analysis & Insights",
 ];
 
 function formatNumber(value) {
@@ -345,6 +371,136 @@ async function generateRegulationSummaryWithLlm() {
   render();
 }
 
+/**
+ * Plain-Language Translator Agent
+ * Translates complex regulatory text into accessible language
+ */
+async function translateToPlainLanguage(text, context = "") {
+  if (!config.OPENAI_API_KEY || !text) {
+    return null;
+  }
+
+  auditLogger.logAgentAction("plain-language-translator", "started", {
+    textLength: text.length,
+    context
+  });
+
+  try {
+    const response = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${config.OPENAI_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: config.OPENAI_MODEL || "gpt-4",
+        messages: [
+          {
+            role: "system",
+            content: `You are a Plain Writing Act compliance expert. Your job is to translate complex regulatory language into clear, accessible English that an 8th-grade reader can understand.
+
+Rules:
+- Use short sentences (15-20 words max)
+- Replace jargon with everyday words
+- Explain technical terms in parentheses
+- Use active voice
+- Break complex ideas into simple steps
+- Maintain legal accuracy
+
+Format your response as clear paragraphs without bullets.`,
+          },
+          {
+            role: "user",
+            content: `Translate this regulatory text into plain language:\n\n${text.slice(0, 3000)}\n\nContext: ${context}`,
+          },
+        ],
+        temperature: 0.3,
+        max_tokens: 800,
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`OpenAI API returned ${response.status}`);
+    }
+
+    const payload = await response.json();
+    const plainText = payload.choices?.[0]?.message?.content || "";
+
+    auditLogger.logMetric("plain-language-translator", "translation-generated", plainText.length, {
+      originalLength: text.length,
+      compressionRatio: (plainText.length / text.length).toFixed(2),
+      model: config.OPENAI_MODEL
+    });
+    auditLogger.logAgentAction("plain-language-translator", "completed");
+
+    return {
+      plainText,
+      originalText: text,
+      readabilityImprovement: "Estimated 8th-grade level",
+    };
+  } catch (error) {
+    auditLogger.logError("plain-language-translator", error);
+    auditLogger.logAgentAction("plain-language-translator", "failed", {
+      error: error.message
+    });
+    return null;
+  }
+}
+
+// Defensive data validation helpers
+function validateDocketData(payload) {
+  if (!payload || typeof payload !== 'object') {
+    console.warn('Invalid docket payload:', payload);
+    return null;
+  }
+  if (!payload.data || !payload.data.attributes) {
+    console.warn('Missing docket attributes:', payload);
+    return null;
+  }
+  return payload.data.attributes;
+}
+
+function validateDocumentData(item) {
+  if (!item || !item.id) {
+    console.warn('Invalid document item - missing ID:', item);
+    return null;
+  }
+  return {
+    id: item.id,
+    title: sanitizeText(item.attributes?.title) || "Untitled document",
+    type: sanitizeText(item.attributes?.documentType) || "Document",
+    postedAt: item.attributes?.postedDate || item.attributes?.lastModifiedDate || null,
+    objectId: item.attributes?.objectId || null,
+    fileType: item.attributes?.fileFormats?.[0]?.format || item.attributes?.fileFormat || "",
+    url: `https://www.regulations.gov/document/${encodeURIComponent(item.id)}`,
+  };
+}
+
+function validateCommentData(item) {
+  if (!item || !item.id) {
+    console.warn('Invalid comment item - missing ID:', item);
+    return null;
+  }
+  const attrs = item.attributes || {};
+  return {
+    comment_id: item.id,
+    source_text: sanitizeText(attrs.comment || attrs.commentText) || "",
+    organization: sanitizeText(attrs.organization || attrs.submitterName) || "Individual",
+    stakeholder_group: sanitizeText(attrs.submitterType) || "Individual Submitter",
+    postedAt: attrs.postedDate || attrs.lastModifiedDate || null,
+  };
+}
+
+function sanitizeText(text) {
+  if (!text || typeof text !== 'string') return '';
+  // Remove any potentially harmful characters, limit length
+  return text
+    .replace(/[<>]/g, '') // Remove angle brackets
+    .replace(/\s+/g, ' ') // Normalize whitespace
+    .trim()
+    .slice(0, 5000); // Limit to reasonable length
+}
+
 function generateDocumentBrief(document, docketTitle) {
   const title = document.title || "This docket document";
   const type = document.type || "document";
@@ -356,6 +512,7 @@ function generateDocumentBrief(document, docketTitle) {
   const cleanAbstract = abstract.replace(/\s+/g, " ").trim();
 
   if (cleanAbstract) {
+    // Limit to ~180 characters (roughly 10 pages worth of summary from API)
     return cleanAbstract.length > 180
       ? `${cleanAbstract.slice(0, 180).trim()}...`
       : cleanAbstract;
@@ -937,6 +1094,10 @@ function getAuthorityBase(comment) {
 }
 
 function scoreAuthority(comment) {
+  auditLogger.logAgentAction("authority-scorer", "started", {
+    commentId: comment.comment_id
+  });
+
   const base = getAuthorityBase(comment);
   const lengthBoost =
     comment.source_text.length > 420
@@ -948,10 +1109,26 @@ function scoreAuthority(comment) {
           : 0;
   const idDigits = comment.comment_id.replace(/\D/g, "");
   const idJitter = idDigits ? Number(idDigits.slice(-1)) % 3 : 0;
-  return Math.max(1, Math.min(10, base + lengthBoost + idJitter));
+  const score = Math.max(1, Math.min(10, base + lengthBoost + idJitter));
+
+  auditLogger.logMetric("authority-scorer", "authority-score", score, {
+    commentId: comment.comment_id,
+    organization: comment.organization,
+    textLength: comment.source_text.length,
+    baseScore: base,
+    lengthBoost,
+    jitter: idJitter
+  });
+  auditLogger.logAgentAction("authority-scorer", "completed");
+
+  return score;
 }
 
 function scorePosition(comment) {
+  auditLogger.logAgentAction("sentiment-scorer", "started", {
+    commentId: comment.comment_id
+  });
+
   const extraction = state.results?.extractions?.get(comment.comment_id);
   const argumentsList = extraction?.arguments || [];
   let support = 0;
@@ -982,20 +1159,42 @@ function scorePosition(comment) {
   if (oppose === support) {
     const lastDigit = Number((comment.comment_id.match(/(\d)$/) || ["0", "0"])[1]);
     const fallbackPositive = lastDigit % 2 === 0;
-    return {
+    const result = {
       label: fallbackPositive ? "Positive" : "Negative",
       score: fallbackPositive ? 0.52 : -0.52,
     };
+
+    auditLogger.logMetric("sentiment-scorer", "sentiment-score", result.score, {
+      commentId: comment.comment_id,
+      label: result.label,
+      supportCount: support,
+      opposeCount: oppose,
+      tie: true
+    });
+    auditLogger.logAgentAction("sentiment-scorer", "completed");
+
+    return result;
   }
 
   const score = clamp((support - oppose) / Math.max(support + oppose, 2), -1, 1);
-  return {
+  const result = {
     label: oppose > support ? "Negative" : "Positive",
     score:
       oppose > support
         ? Math.min(score, -0.55)
         : Math.max(score, 0.55),
   };
+
+  auditLogger.logMetric("sentiment-scorer", "sentiment-score", result.score, {
+    commentId: comment.comment_id,
+    label: result.label,
+    supportCount: support,
+    opposeCount: oppose,
+    rawScore: score
+  });
+  auditLogger.logAgentAction("sentiment-scorer", "completed");
+
+  return result;
 }
 
 function buildCommentTriageRows(comments) {
@@ -1058,14 +1257,34 @@ function summarizeTopicRows(topic, topicRows) {
 
 function renderCommentCell(comment) {
   const expanded = state.expandedComments.has(comment.comment_id);
+  const attachmentBadge = comment.hasAttachments
+    ? `<span class="attachment-badge" title="${comment.attachments.length} attachment(s)">📎 ${comment.attachments.length}</span>`
+    : "";
+
   if (expanded) {
+    const attachmentsList = comment.hasAttachments
+      ? `<div class="attachments-list">
+          ${comment.attachments
+            .map(
+              (att) =>
+                `<a href="${escapeHtml(att.fileUrl || "#")}" target="_blank" class="attachment-link" ${!att.fileUrl ? 'onclick="return false;"' : ""}>
+                  ${escapeHtml(att.title)} ${att.format ? `(${att.format})` : ""}
+                  ${att.size ? `<small>${(att.size / 1024).toFixed(1)}KB</small>` : ""}
+                </a>`
+            )
+            .join("")}
+        </div>`
+      : "";
+
     return `
       ${comment.source_text}
+      ${attachmentsList}
       <button class="more-link" data-action="toggle-comment-text" data-comment-id="${comment.comment_id}">less</button>
     `;
   }
 
   return `
+    ${attachmentBadge}
     <button class="more-link" data-action="toggle-comment-text" data-comment-id="${comment.comment_id}">more</button>
   `;
 }
@@ -1314,28 +1533,75 @@ function buildTopicGraph(topic) {
   `;
 }
 
-function mapLiveComments(apiComments) {
+function mapLiveComments(apiComments, included = []) {
+  // Defensive: validate input arrays
+  if (!Array.isArray(apiComments)) {
+    console.warn('mapLiveComments received non-array apiComments:', apiComments);
+    return [];
+  }
+
+  const attachmentsByCommentId = new Map();
+
+  // Safely process included attachments
+  (included || []).forEach((item) => {
+    if (item && item.type === "attachments") {
+      const commentId = item.attributes?.commentId || item.id;
+      if (commentId) {
+        if (!attachmentsByCommentId.has(commentId)) {
+          attachmentsByCommentId.set(commentId, []);
+        }
+        attachmentsByCommentId.get(commentId).push({
+          id: item.id,
+          title: sanitizeText(item.attributes?.title) || "Attachment",
+          fileUrl: item.attributes?.fileUrl || null,
+          format: item.attributes?.format || null,
+          size: item.attributes?.fileSize || null,
+        });
+      }
+    }
+  });
+
   return apiComments
     .map((item, index) => {
+      // Validate each comment item
+      if (!item || !item.id) {
+        console.warn('Invalid comment item at index', index, item);
+        return null;
+      }
+
       const attributes = item.attributes || {};
-      const sourceText =
+      const sourceText = sanitizeText(
         attributes.comment ||
         attributes.commentText ||
         attributes.title ||
-        "";
+        ""
+      );
+
+      // Skip comments with no text content
+      if (!sourceText) {
+        console.warn('Comment has no text content:', item.id);
+        return null;
+      }
+
+      const attachments = attachmentsByCommentId.get(item.id) || [];
+
       return {
-        comment_id: attributes.commentOnDocumentId || item.id || `LIVE-${String(index + 1).padStart(5, "0")}`,
-        submitter_name:
+        comment_id: item.id || `LIVE-${String(index + 1).padStart(5, "0")}`,
+        submitter_name: sanitizeText(
           attributes.submitterName ||
           [attributes.firstName, attributes.lastName].filter(Boolean).join(" ") ||
-          "Public submitter",
-        organization: attributes.organization || "Public submitter",
-        stakeholder_group: attributes.category || "Public comment",
+          "Public submitter"
+        ),
+        organization: sanitizeText(attributes.organization) || "Public submitter",
+        stakeholder_group: sanitizeText(attributes.category) || "Public comment",
         timestamp: attributes.postedDate || new Date().toISOString(),
-        source_text: sourceText.trim(),
+        source_text: sourceText,
+        attachments,
+        hasAttachments: attachments.length > 0,
       };
     })
-    .filter((comment) => comment.source_text);
+    .filter(Boolean) // Remove null items
+    .filter((comment) => comment && comment.source_text); // Ensure valid comments with text
 }
 
 async function fetchJson(url) {
@@ -1357,6 +1623,9 @@ async function loadDocket() {
     return;
   }
 
+  // Log docket fetcher start
+  auditLogger.logAgentAction("docket-fetcher", "started", { docketId });
+
   state.loadingRemote = true;
   state.remoteError = "";
   state.selectedCommentId = null;
@@ -1364,29 +1633,37 @@ async function loadDocket() {
 
   try {
     const docketUrl = `${API_BASE}/dockets/${encodeQuery(docketId)}?api_key=${API_KEY}`;
-    const documentsUrl = `${API_BASE}/documents?filter[docketId]=${encodeQuery(docketId)}&page[size]=12&sort=-postedDate&api_key=${API_KEY}`;
+    const documentsUrl = `${API_BASE}/documents?filter[docketId]=${encodeQuery(docketId)}&include=attachments&page[size]=12&sort=-postedDate&api_key=${API_KEY}`;
 
+    // Log API requests
+    auditLogger.logAPIRequest("docket-fetcher", docketUrl, "GET");
+    auditLogger.logAPIRequest("document-fetcher", documentsUrl, "GET");
+
+    const fetchStart = performance.now();
     const [docketPayload, documentsPayload] = await Promise.all([
       fetchJson(docketUrl),
       fetchJson(documentsUrl),
     ]);
+    const fetchDuration = performance.now() - fetchStart;
 
-    const docket = docketPayload.data?.attributes || {};
-    const documents = (documentsPayload.data || []).map((item) => ({
-      id: item.id,
-      title: item.attributes?.title || "Untitled document",
-      type: item.attributes?.documentType || "Document",
-      postedAt: item.attributes?.postedDate || item.attributes?.lastModifiedDate,
-      objectId: item.attributes?.objectId,
-      fileType:
-        item.attributes?.fileFormats?.[0]?.format ||
-        item.attributes?.fileFormat ||
-        "",
-      url: `https://www.regulations.gov/document/${item.id}`,
-    }));
+    // Log API responses
+    auditLogger.logAPIResponse("docket-fetcher", "request-log-id", 200, docketPayload, fetchDuration);
+    auditLogger.logAPIResponse("document-fetcher", "request-log-id", 200, documentsPayload, fetchDuration);
+
+    // Validate docket data with defensive checks
+    const docket = validateDocketData(docketPayload) || {};
+
+    // Validate and filter document data
+    const documents = (documentsPayload.data || [])
+      .map(validateDocumentData)
+      .filter(Boolean); // Remove any null/invalid items
+
+    if (documents.length === 0) {
+      console.warn('No valid documents found in response');
+    }
 
     const documentDetails = await Promise.all(
-      documents.slice(0, 8).map(async (doc) => {
+      documents.slice(0, 10).map(async (doc) => {
         try {
           const detailUrl = `${API_BASE}/documents/${encodeQuery(doc.id)}?api_key=${API_KEY}`;
           const detailPayload = await fetchJson(detailUrl);
@@ -1427,17 +1704,31 @@ async function loadDocket() {
       documents[0];
 
     if (commentTarget?.objectId) {
-      const commentsUrl = `${API_BASE}/comments?filter[commentOnId]=${encodeQuery(commentTarget.objectId)}&page[size]=20&sort=-postedDate&api_key=${API_KEY}`;
+      const commentsUrl = `${API_BASE}/comments?filter[commentOnId]=${encodeQuery(commentTarget.objectId)}&include=attachments&page[size]=20&sort=-postedDate&api_key=${API_KEY}`;
       try {
+        auditLogger.logAPIRequest("comment-fetcher", commentsUrl, "GET");
+        const commentFetchStart = performance.now();
         const commentsPayload = await fetchJson(commentsUrl);
-        comments = mapLiveComments(commentsPayload.data || []);
+        const commentFetchDuration = performance.now() - commentFetchStart;
+        auditLogger.logAPIResponse("comment-fetcher", "comment-request-id", 200, commentsPayload, commentFetchDuration);
+
+        comments = mapLiveComments(commentsPayload.data || [], commentsPayload.included || []);
+        auditLogger.logMetric("comment-fetcher", "comments-fetched", comments.length, {
+          targetDocument: commentTarget.objectId
+        });
       } catch (error) {
+        auditLogger.logError("comment-fetcher", error);
         comments = [];
       }
     }
 
+    // Determine which comments to analyze
     const analysisComments =
-      comments.length >= 25 ? comments.slice(0, 250) : generateDemoComments();
+      comments.length >= 25
+        ? comments.slice(0, 250)
+        : comments.length > 0
+          ? comments
+          : [];
 
     state.liveData = {
       docketId,
@@ -1450,8 +1741,10 @@ async function loadDocket() {
     state.sourceLabel =
       comments.length >= 25
         ? `Live Regulations.gov comments for ${docketId}`
-        : `Synthetic analysis set aligned to ${docketId} because public comment text was limited or unavailable`;
-    state.results = runPipeline(state.comments, { collapseCampaigns: true });
+        : comments.length > 0
+          ? `${comments.length} live comment(s) from ${docketId} (limited dataset)`
+          : `No public comments available for ${docketId}`;
+    state.results = analysisComments.length > 0 ? runPipeline(state.comments, { collapseCampaigns: true }) : null;
     state.selectedTopicId = state.results.topics[0]?.id || null;
     state.regulationSummaryLines = summarizeRegulation({ docket });
     state.regulationSummaryStatus = "fallback";
@@ -1461,7 +1754,23 @@ async function loadDocket() {
     if (state.openAiKeyStatus === "working") {
       void generateRegulationSummaryWithLlm();
     }
+
+    // Log completion
+    auditLogger.logAgentAction("docket-fetcher", "completed", {
+      documentsLoaded: documentDetails.length,
+      commentsLoaded: comments.length,
+      usingLiveData: comments.length >= 25
+    });
+    auditLogger.logAgentAction("document-fetcher", "completed", {
+      documents: documentDetails.length
+    });
+
   } catch (error) {
+    auditLogger.logError("docket-fetcher", error);
+    auditLogger.logAgentAction("docket-fetcher", "failed", {
+      error: error.message
+    });
+
     state.remoteError =
       "Live docket fetch failed. You can still use the lead-and-copper sample workflow below.";
     state.liveData = null;
@@ -1523,12 +1832,20 @@ function renderStepZero() {
     <section class="wizard-panel">
       ${renderStepHeader(1, "Pick a Docket ID")}
       <p class="lead-text">Start from a real public rulemaking record. Pick one of the dockets below and DocketIQ will load the docket snapshot, public documents, and sample comments automatically.</p>
+      <div class="data-type-legend">
+        <span class="legend-item">🔵 Simulated</span>
+        <span class="legend-item">🟢 Real Data</span>
+      </div>
       <div class="sample-chip-row">
         ${SAMPLE_DOCKETS.map(
           (sample) => `
             <button class="sample-chip ${state.docketInput === sample.id ? "sample-chip-selected" : ""} ${state.loadingRemote && state.docketInput === sample.id ? "sample-chip-loading" : ""}" data-action="sample-docket" data-docket-id="${sample.id}" ${state.loadingRemote ? "disabled" : ""}>
-              <strong>${sample.id}</strong>
+              <div class="sample-chip-header">
+                <strong>${sample.id}</strong>
+                <span class="data-type-badge">${sample.badge}</span>
+              </div>
               <span>${sample.label}</span>
+              <span class="sample-chip-meta">${sample.description}</span>
               <span class="sample-chip-cta">${state.loadingRemote && state.docketInput === sample.id ? "Loading docket..." : "Click to load docket"}</span>
             </button>
           `
@@ -1559,12 +1876,12 @@ function renderStepZero() {
 function renderStepOne() {
   const live = state.liveData;
   const agency = live?.docket?.agencyId || live?.docket?.agencyAcronym || "Agency";
-  const documents =
-    live?.documents?.slice(0, 8) ||
-    DOCKET_DOCUMENTS.map((doc) => ({
-      ...doc,
-      aiSummary: generateDocumentBrief(doc, state.scenario.title),
-    }));
+  const allDocuments = live?.documents || DOCKET_DOCUMENTS.map((doc) => ({
+    ...doc,
+    aiSummary: generateDocumentBrief(doc, state.scenario.title),
+  }));
+  const documents = allDocuments.slice(0, 10);
+  const totalDocuments = allDocuments.length;
   const summaryLines =
     state.regulationSummaryLines.length > 0
       ? state.regulationSummaryLines
@@ -1591,6 +1908,14 @@ function renderStepOne() {
         <div>
           <span class="snapshot-label">Status</span>
           <strong>${live ? "Live metadata loaded" : "Using sample record"}</strong>
+        </div>
+        <div>
+          <span class="snapshot-label">Documents</span>
+          <strong>${documents.length} found</strong>
+        </div>
+        <div>
+          <span class="snapshot-label">Public Comments</span>
+          <strong>${live?.comments?.length || 0} found</strong>
         </div>
       </div>
       <article class="content-card">
@@ -1630,12 +1955,38 @@ function renderStepOne() {
             )
             .join("")}
         </div>
+        ${totalDocuments > 10 ? `
+          <p style="text-align: center; color: var(--ink-soft); margin-top: 16px; font-style: italic;">
+            Showing first 10 of ${totalDocuments} documents. Visit <a href="https://www.regulations.gov/docket/${state.docketInput}" target="_blank" rel="noreferrer">Regulations.gov</a> to see all documents.
+          </p>
+        ` : ''}
       </article>
     </section>
   `;
 }
 
 function renderStepTwo() {
+  // Handle no comments case
+  if (!state.comments || state.comments.length === 0) {
+    return `
+      <section class="wizard-panel">
+        ${renderStepHeader(3, "Analysis & Insights")}
+        <div class="status-card">
+          <h3>No Public Comments Available</h3>
+          <p>This docket has <strong>${state.liveData?.documents?.length || 0} document(s)</strong> but no public comments have been submitted yet.</p>
+          <p>The Analysis & Insights section requires public comment data to generate visualizations and summaries.</p>
+          ${state.liveData?.documents?.length > 0 ? `
+            <p><strong>Available documents:</strong></p>
+            <ul>
+              ${state.liveData.documents.slice(0, 10).map(doc => `<li>${escapeHtml(doc.title)}</li>`).join('')}
+              ${state.liveData.documents.length > 10 ? `<li><em>...and ${state.liveData.documents.length - 10} more</em></li>` : ''}
+            </ul>
+          ` : ''}
+        </div>
+      </section>
+    `;
+  }
+
   const triageRows = buildCommentTriageRows(state.comments);
   const topicMetrics = getTopicMetrics(triageRows);
   const activeTopicId = getActiveTopicId();
@@ -2205,10 +2556,6 @@ function renderStepContent() {
       return renderStepOne();
     case 2:
       return renderStepTwo();
-    case 3:
-      return renderStepThree();
-    case 4:
-      return renderStepFour();
     default:
       return renderStepZero();
   }
@@ -2235,29 +2582,462 @@ function render() {
         <div class="hero-meta">
           <span>Start from the docket, then follow the review workflow.</span>
         </div>
-        <div class="${apiKeyPanelClass}">
-          <label class="api-key-label" for="openai-api-key">OpenAI API key</label>
-          <div class="api-key-row">
-            <input
-              id="openai-api-key"
-              class="api-key-input"
-              type="password"
-              placeholder="sk-..."
-              value="${escapeHtml(state.openAiApiKey)}"
-              data-action="openai-api-key"
-              autocomplete="off"
-              spellcheck="false"
-            />
-          </div>
-          <div class="api-key-meta">
-            <span>Model: <strong>gpt-5.2-pro</strong></span>
-            <span>${escapeHtml(getApiKeyMetaText())}</span>
-          </div>
+        <div class="transparency-buttons">
+          <a href="/agents.html" class="transparency-btn" title="View all AI agents and their capabilities">
+            <span class="transparency-btn-icon">🤖</span>
+            <span>Agents</span>
+          </a>
+          <a href="/architecture.html" class="transparency-btn" title="View system architecture and data flow">
+            <span class="transparency-btn-icon">📊</span>
+            <span>Architecture</span>
+          </a>
+          <button class="transparency-btn ${state.showAuditPanel ? 'transparency-btn-active' : ''}" data-action="toggle-audit-panel" title="View full audit trail">
+            <span class="transparency-btn-icon">📋</span>
+            <span>Audit</span>
+          </button>
         </div>
       </div>
     </header>
     ${state.results ? renderStepNav() : ""}
     ${renderStepContent()}
+    ${renderTransparencyPanels()}
+  `;
+}
+
+function renderTransparencyPanels() {
+  return `
+    ${state.showAuditPanel ? renderAuditPanel() : ''}
+  `;
+}
+
+function renderAgentsPanel() {
+  const agentsByType = {};
+  AGENT_REGISTRY.forEach(agent => {
+    if (!agentsByType[agent.type]) {
+      agentsByType[agent.type] = [];
+    }
+    agentsByType[agent.type].push(agent);
+  });
+
+  return `
+    <div class="transparency-overlay" data-action="close-agents-panel">
+      <div class="transparency-panel" onclick="event.stopPropagation()">
+        <div class="transparency-panel-header">
+          <h2>🤖 AI Agents</h2>
+          <button class="transparency-close" data-action="close-agents-panel" title="Close">✕</button>
+        </div>
+        <div class="transparency-panel-content">
+          <p class="transparency-intro">DocketIQ uses 16 specialized AI agents, color-coded by function. Click any agent to see its full capabilities, limitations, implementation details, and audit trail.</p>
+
+          ${Object.keys(AGENT_TYPES).map(typeKey => {
+            const type = AGENT_TYPES[typeKey];
+            const agents = agentsByType[typeKey] || [];
+            if (agents.length === 0) return '';
+
+            return `
+              <div class="agent-type-section">
+                <div class="agent-type-header" style="border-left-color: ${type.color}">
+                  <h3 style="color: ${type.color}">${type.label}</h3>
+                  <p>${type.description}</p>
+                </div>
+                <div class="agent-grid">
+                  ${agents.map(agent => `
+                    <button class="agent-card-mini ${state.selectedTransparencyAgent === agent.id ? 'agent-card-selected' : ''}" data-action="select-agent" data-agent-id="${agent.id}" style="border-left-color: ${type.color}">
+                      <strong>${agent.name}</strong>
+                      <span>${agent.model}</span>
+                    </button>
+                  `).join('')}
+                </div>
+              </div>
+            `;
+          }).join('')}
+
+          ${state.selectedTransparencyAgent ? `
+            <!-- DEBUG: selectedTransparencyAgent = ${state.selectedTransparencyAgent} -->
+            ${(() => {
+              const agent = getAgentById(state.selectedTransparencyAgent);
+              if (!agent) {
+                return '<div style="color: red; padding: 20px; background: #fff; margin: 20px;">❌ ERROR: getAgentById returned null for ' + state.selectedTransparencyAgent + '</div>';
+              }
+              return renderAgentDetail(agent);
+            })()}
+          ` : '<div style="color: #888; padding: 20px; text-align: center;">Click an agent above to see its card</div>'}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderAgentDetail(agent) {
+  if (!agent) return '';
+
+  const type = AGENT_TYPES[agent.type];
+  const callers = getCallers(agent.id);
+  const callees = getCallees(agent.id);
+
+  return `
+    <div class="agent-detail-panel">
+      <div class="agent-detail-header" style="background: linear-gradient(135deg, ${type.color}22, ${type.color}11)">
+        <h3>${agent.name}</h3>
+        <span class="agent-detail-type" style="background: ${type.color}">${type.label}</span>
+      </div>
+
+      <div class="agent-detail-section">
+        <h4>💬 System Prompt</h4>
+        <div class="agent-prompt-box">
+          <code>${escapeHtml(agent.prompt)}</code>
+        </div>
+      </div>
+
+      <div class="agent-detail-section">
+        <h4>🎯 What This Agent Can Do</h4>
+        <ul class="capability-list capability-can">
+          ${agent.skills.map(skill => `<li><span class="capability-icon">✓</span>${escapeHtml(skill)}</li>`).join('')}
+        </ul>
+      </div>
+
+      <div class="agent-detail-section">
+        <h4>🚫 What This Agent Cannot Do</h4>
+        <ul class="capability-list capability-cannot">
+          ${getAgentLimitations(agent).map(limit => `<li><span class="capability-icon">✗</span>${escapeHtml(limit)}</li>`).join('')}
+        </ul>
+      </div>
+
+      <div class="agent-detail-grid">
+        <div class="agent-detail-section">
+          <h4>🔧 Tools</h4>
+          <ul class="simple-list">
+            ${agent.tools.map(tool => `<li>${escapeHtml(tool)}</li>`).join('')}
+          </ul>
+        </div>
+
+        <div class="agent-detail-section">
+          <h4>📥 Input Schema</h4>
+          <pre class="schema-box">${JSON.stringify(agent.inputSchema, null, 2)}</pre>
+        </div>
+
+        <div class="agent-detail-section">
+          <h4>📤 Output Schema</h4>
+          <pre class="schema-box">${JSON.stringify(agent.outputSchema, null, 2)}</pre>
+        </div>
+      </div>
+
+      <div class="agent-detail-grid">
+        <div class="agent-detail-section">
+          <h4>👥 Can Be Called By</h4>
+          <ul class="simple-list">
+            ${Array.isArray(agent.canBeCalled) ? agent.canBeCalled.map(c => `<li>${escapeHtml(c)}</li>`).join('') : `<li>${escapeHtml(String(agent.canBeCalled))}</li>`}
+          </ul>
+        </div>
+
+        <div class="agent-detail-section">
+          <h4>📞 Can Call</h4>
+          <ul class="simple-list">
+            ${agent.canCall && agent.canCall.length > 0 ? agent.canCall.map(c => `<li>${escapeHtml(c)}</li>`).join('') : '<li class="muted">None (terminal agent)</li>'}
+          </ul>
+        </div>
+      </div>
+
+      ${agent.implementation ? `
+        <div class="agent-detail-section">
+          <h4>💻 Implementation in DocketIQ</h4>
+          <div class="implementation-box">
+            <div class="implementation-row">
+              <strong>File:</strong> <code>${escapeHtml(agent.implementation.file)}</code>
+            </div>
+            <div class="implementation-row">
+              <strong>Function:</strong> <code>${escapeHtml(agent.implementation.function)}</code>
+            </div>
+            <div class="implementation-row">
+              <strong>Lines:</strong> <code>${escapeHtml(agent.implementation.lines)}</code>
+            </div>
+            <div class="implementation-row">
+              <strong>Status:</strong> <span class="status-badge status-${agent.implementation.status}">${escapeHtml(agent.implementation.status)}</span>
+            </div>
+            ${agent.usageInApp ? `
+              <div class="implementation-row">
+                <strong>Usage:</strong> ${escapeHtml(agent.usageInApp)}
+              </div>
+            ` : ''}
+            ${agent.invokedBy ? `
+              <div class="implementation-row">
+                <strong>Call Chain:</strong> <code class="call-chain">${escapeHtml(agent.invokedBy)}</code>
+              </div>
+            ` : ''}
+          </div>
+        </div>
+      ` : ''}
+    </div>
+  `;
+}
+
+function getAgentLimitations(agent) {
+  const limitations = {
+    "docket-fetcher": ["Modify docket data", "Delete records", "Create new dockets"],
+    "document-fetcher": ["Parse PDF content", "Extract text from images", "Modify documents"],
+    "comment-fetcher": ["Filter by sentiment", "Modify comments", "Create fake comments"],
+    "comment-normalizer": ["Understand sarcasm perfectly", "Detect all duplicates", "Translate languages"],
+    "duplicate-detector": ["Detect sophisticated astroturfing", "Identify all form letters with 100% accuracy", "Merge different campaigns automatically"],
+    "topic-classifier": ["Create new topics", "Understand context outside training data", "Classify ambiguous text perfectly"],
+    "argument-extractor": ["Evaluate argument validity", "Detect logical fallacies", "Generate counterarguments"],
+    "sentiment-scorer": ["Understand complex emotions", "Detect subtle sarcasm", "Score mixed sentiments with certainty"],
+    "authority-scorer": ["Verify credentials", "Access private databases", "Make legal determinations"],
+    "graph-builder": ["Create causal relationships", "Prove correlations", "Infer unstated connections"],
+    "summary-generator": ["Make policy decisions", "Choose between alternatives", "Override analyst judgment"],
+    "topic-view-builder": ["Filter based on politics", "Hide dissenting views", "Bias topic ranking"],
+    "plain-language-translator": ["Guarantee perfect accuracy", "Replace legal review", "Make binding interpretations"],
+    "heatmap-generator": ["Determine comment quality", "Predict policy outcomes", "Weight comments by engagement"],
+    "timeline-analyzer": ["Prove coordination", "Identify specific organizers", "Determine campaign legality"],
+    "fraud-detector": ["Guarantee 100% accuracy", "Replace human verification", "Make legal determinations about fraud"],
+  };
+
+  return limitations[agent.id] || ["Make autonomous decisions", "Access restricted data", "Override human oversight"];
+}
+
+function renderArchitecturePanel() {
+  const stepName = STEPS[state.step] || "Setup";
+  const stepArchitecture = getStepArchitecture(state.step);
+
+  return `
+    <div class="transparency-overlay" data-action="close-architecture-panel">
+      <div class="transparency-panel" onclick="event.stopPropagation()">
+        <div class="transparency-panel-header">
+          <h2>📊 Architecture</h2>
+          <button class="transparency-close" data-action="close-architecture-panel" title="Close">✕</button>
+        </div>
+        <div class="transparency-panel-content">
+          <div class="architecture-current-step">
+            <h3>Current Step: ${stepName}</h3>
+            <p class="architecture-step-desc">${stepArchitecture.description}</p>
+          </div>
+
+          <div class="architecture-section">
+            <h4>📥 Data Input</h4>
+            <ul class="architecture-list">
+              ${stepArchitecture.inputs.map(input => `<li>${escapeHtml(input)}</li>`).join('')}
+            </ul>
+          </div>
+
+          <div class="architecture-section">
+            <h4>🤖 Agents Used</h4>
+            <div class="architecture-agents">
+              ${stepArchitecture.agents.map(agentId => {
+                const agent = getAgentById(agentId);
+                if (!agent) return '';
+                const type = AGENT_TYPES[agent.type];
+                return `
+                  <div class="architecture-agent-card" style="border-left-color: ${type.color}">
+                    <strong>${agent.name}</strong>
+                    <span>${agent.model}</span>
+                  </div>
+                `;
+              }).join('')}
+            </div>
+          </div>
+
+          <div class="architecture-section">
+            <h4>⚙️ Processing Steps</h4>
+            <ol class="architecture-steps-list">
+              ${stepArchitecture.processing.map(step => `<li>${escapeHtml(step)}</li>`).join('')}
+            </ol>
+          </div>
+
+          <div class="architecture-section">
+            <h4>📤 Data Output</h4>
+            <ul class="architecture-list">
+              ${stepArchitecture.outputs.map(output => `<li>${escapeHtml(output)}</li>`).join('')}
+            </ul>
+          </div>
+
+          <div class="architecture-section">
+            <h4>🔍 Data Flow Diagram</h4>
+            <div class="architecture-flow">
+              ${renderDataFlow(stepArchitecture)}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function getStepArchitecture(step) {
+  const architectures = {
+    0: {
+      description: "User selects a docket ID to begin the analysis workflow",
+      inputs: ["User selection", "SAMPLE_DOCKETS catalog", "Data type indicators"],
+      agents: [],
+      processing: [
+        "Display docket options with data type badges",
+        "Wait for user selection",
+        "Validate docket ID format",
+        "Prepare for API call"
+      ],
+      outputs: ["Selected docket ID", "Data type (simulated or real)", "Transition to Step 2"]
+    },
+    1: {
+      description: "Fetch and display docket metadata, documents, and sample comments",
+      inputs: ["Docket ID", "Regulations.gov API", "Simulated data (if applicable)"],
+      agents: ["docket-fetcher", "document-fetcher", "comment-fetcher", "attachment-processor"],
+      processing: [
+        "Fetch docket metadata from API or load simulated data",
+        "Retrieve document list with attachments",
+        "Pull sample comments (up to 20)",
+        "Parse attachment metadata",
+        "Format data for display"
+      ],
+      outputs: ["Docket metadata object", "Document array", "Comment array with attachments", "Snapshot UI"]
+    },
+    2: {
+      description: "AI-powered analysis of public comments with topic clustering, sentiment scoring, and campaign detection",
+      inputs: ["Comment array", "Docket metadata", "Topic registry"],
+      agents: [
+        "comment-normalizer",
+        "campaign-detector",
+        "topic-classifier",
+        "argument-extractor",
+        "entity-recognizer",
+        "sentiment-scorer",
+        "authority-scorer",
+        "summary-generator",
+        "topic-view-builder",
+        "recommendation-engine"
+      ],
+      processing: [
+        "Normalize comment text",
+        "Detect duplicate campaigns",
+        "Classify comments by topic",
+        "Extract arguments and evidence",
+        "Recognize stakeholder entities",
+        "Score sentiment and authority",
+        "Generate topic summaries",
+        "Build interactive visualizations",
+        "Create analyst recommendations"
+      ],
+      outputs: [
+        "Topic clusters with evidence",
+        "Sentiment distribution",
+        "Campaign groups",
+        "Stakeholder breakdown",
+        "Actionable insights",
+        "Source-linked summaries"
+      ]
+    }
+  };
+
+  return architectures[step] || architectures[0];
+}
+
+function renderDataFlow(architecture) {
+  return `
+    <div class="flow-diagram">
+      <div class="flow-box flow-input">
+        <strong>Input</strong>
+        ${architecture.inputs.slice(0, 2).map(i => `<div>${escapeHtml(i)}</div>`).join('')}
+      </div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-box flow-process">
+        <strong>Processing</strong>
+        <div>${architecture.agents.length} agents</div>
+        <div>${architecture.processing.length} steps</div>
+      </div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-box flow-output">
+        <strong>Output</strong>
+        ${architecture.outputs.slice(0, 2).map(o => `<div>${escapeHtml(o)}</div>`).join('')}
+      </div>
+    </div>
+  `;
+}
+
+function renderAuditPanel() {
+  const logs = auditLogger.logs;
+  const depthLevel = state.auditDepthLevel || 0;
+
+  return `
+    <div class="transparency-overlay" data-action="close-audit-panel">
+      <div class="transparency-panel" onclick="event.stopPropagation()">
+        <div class="transparency-panel-header">
+          <h2>📋 Audit Trail</h2>
+          <button class="transparency-close" data-action="close-audit-panel" title="Close">✕</button>
+        </div>
+        <div class="transparency-panel-content">
+          <div class="audit-controls">
+            <div class="audit-depth-buttons">
+              <button class="audit-depth-btn ${depthLevel === 0 ? 'active' : ''}" data-action="set-audit-depth" data-depth="0">
+                Summary
+              </button>
+              <button class="audit-depth-btn ${depthLevel === 1 ? 'active' : ''}" data-action="set-audit-depth" data-depth="1">
+                Details
+              </button>
+              <button class="audit-depth-btn ${depthLevel === 2 ? 'active' : ''}" data-action="set-audit-depth" data-depth="2">
+                Full Data
+              </button>
+            </div>
+            <button class="audit-export-btn" data-action="export-audit" title="Export audit logs">
+              💾 Export JSON
+            </button>
+          </div>
+
+          ${logs.length === 0 ? `
+            <div class="audit-empty">
+              <p>No audit logs yet. Interact with the app to see the audit trail.</p>
+              <p class="audit-hint">Every API call, agent action, and data transformation will be logged here.</p>
+            </div>
+          ` : renderAuditLogs(logs, depthLevel)}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderAuditLogs(logs, depthLevel) {
+  if (depthLevel === 0) {
+    // Summary view - group by type
+    const summary = logs.reduce((acc, log) => {
+      const type = log.type || 'other';
+      acc[type] = (acc[type] || 0) + 1;
+      return acc;
+    }, {});
+
+    return `
+      <div class="audit-summary">
+        <h4>Audit Summary (${logs.length} total events)</h4>
+        ${Object.entries(summary).map(([type, count]) => `
+          <div class="audit-summary-row">
+            <span class="audit-summary-type">${escapeHtml(type)}</span>
+            <span class="audit-summary-count">${count} events</span>
+          </div>
+        `).join('')}
+      </div>
+    `;
+  }
+
+  if (depthLevel === 1) {
+    // Details view - show log entries with key info
+    return `
+      <div class="audit-details">
+        ${logs.map((log, i) => `
+          <div class="audit-log-entry">
+            <div class="audit-log-header">
+              <span class="audit-log-time">${new Date(log.timestamp).toLocaleTimeString()}</span>
+              <span class="audit-log-type">${escapeHtml(log.type || 'event')}</span>
+            </div>
+            <div class="audit-log-content">
+              ${log.agentId ? `<strong>Agent:</strong> ${escapeHtml(log.agentId)}<br>` : ''}
+              ${log.action ? `<strong>Action:</strong> ${escapeHtml(log.action)}` : ''}
+            </div>
+          </div>
+        `).join('')}
+      </div>
+    `;
+  }
+
+  // Full data view - complete JSON
+  return `
+    <div class="audit-full-data">
+      <pre class="audit-json">${JSON.stringify(logs, null, 2)}</pre>
+    </div>
   `;
 }
 
@@ -2288,13 +3068,14 @@ document.addEventListener("click", (event) => {
     return;
   }
 
-  if (target.dataset.agentId) {
+  const action = target.dataset.action;
+
+  if (target.dataset.agentId && !action) {
+    // Only handle agentId if there's no action (backward compatibility for non-transparency panels)
     state.selectedAgentId = target.dataset.agentId;
     render();
     return;
   }
-
-  const action = target.dataset.action;
   if (action === "sample-docket") {
     state.docketInput = target.dataset.docketId || state.docketInput;
     loadDocket();
@@ -2335,6 +3116,35 @@ document.addEventListener("click", (event) => {
     state.step += 1;
     state.maxUnlockedStep = Math.max(state.maxUnlockedStep, state.step);
     render();
+    return;
+  }
+
+  // Transparency panel actions
+  if (action === "toggle-audit-panel") {
+    state.showAuditPanel = !state.showAuditPanel;
+    render();
+    return;
+  }
+  if (action === "close-audit-panel") {
+    state.showAuditPanel = false;
+    render();
+    return;
+  }
+  if (action === "set-audit-depth") {
+    state.auditDepthLevel = parseInt(target.dataset.depth, 10);
+    render();
+    return;
+  }
+  if (action === "export-audit") {
+    const exportData = auditLogger.export();
+    const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `docketiq-audit-${Date.now()}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    return;
   }
 });
 

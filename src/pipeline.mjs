@@ -1,3 +1,5 @@
+import { auditLogger } from "./audit.mjs";
+
 const STOP_WORDS = new Set([
   "the",
   "and",
@@ -738,17 +740,80 @@ function buildTopicViews(comments, extractions, summary, collapseCampaigns) {
 
 export function runPipeline(comments, options = {}) {
   const startedAt = performance.now();
+
+  // Log pipeline start
+  auditLogger.logAgentAction("comment-normalizer", "started", {
+    commentCount: comments.length
+  });
+
+  // Stage 1: Build exact groups (normalization)
   const exactGroups = buildExactGroups(comments);
+  auditLogger.logTransformation("comment-normalizer", "text-normalization",
+    { rawComments: comments.length },
+    { exactGroups: exactGroups.length }
+  );
+  auditLogger.logAgentAction("comment-normalizer", "completed", {
+    exactGroups: exactGroups.length
+  });
+
+  // Stage 2: Detect campaigns (duplicate detection)
+  auditLogger.logAgentAction("duplicate-detector", "started", {
+    exactGroups: exactGroups.length
+  });
   const clusters = detectCampaigns(exactGroups).sort((a, b) => b.size - a.size);
+  auditLogger.logMetric("duplicate-detector", "campaigns-detected", clusters.length, {
+    totalComments: comments.length,
+    campaignSizes: clusters.map(c => c.size)
+  });
+  auditLogger.logAgentAction("duplicate-detector", "completed", {
+    campaigns: clusters.length
+  });
+
+  // Stage 3: Extract topics and arguments
+  auditLogger.logAgentAction("topic-classifier", "started");
+  auditLogger.logAgentAction("argument-extractor", "started");
 
   const extractions = new Map();
   comments.forEach((comment) => {
     extractions.set(comment.comment_id, extractComment(comment));
   });
 
+  auditLogger.logMetric("topic-classifier", "comments-classified", comments.length, {
+    uniqueTopics: new Set([...extractions.values()].flatMap(e => e.topics)).size
+  });
+  auditLogger.logAgentAction("topic-classifier", "completed");
+
+  auditLogger.logMetric("argument-extractor", "arguments-extracted",
+    [...extractions.values()].reduce((sum, e) => sum + e.arguments.length, 0), {
+    commentsWithArguments: [...extractions.values()].filter(e => e.arguments.length > 0).length
+  });
+  auditLogger.logAgentAction("argument-extractor", "completed");
+
+  // Stage 4: Generate summary
+  auditLogger.logAgentAction("summary-generator", "started");
   const summary = summarize(comments, extractions, clusters, options.collapseCampaigns ?? true);
+  auditLogger.logMetric("summary-generator", "sections-generated", summary.summarySections.length, {
+    briefLength: summary.summarySections.reduce((sum, s) => sum + s.body.length, 0)
+  });
+  auditLogger.logAgentAction("summary-generator", "completed");
+
+  // Stage 5: Build knowledge graph
+  auditLogger.logAgentAction("graph-builder", "started");
   const graph = buildKnowledgeGraph(comments, extractions, clusters, summary.canonicalIds);
+  auditLogger.logMetric("graph-builder", "graph-size", graph.nodes.length, {
+    nodes: graph.nodes.length,
+    edges: graph.edges.length,
+    nodeTypes: [...new Set(graph.nodes.map(n => n.type))]
+  });
+  auditLogger.logAgentAction("graph-builder", "completed");
+
+  // Stage 6: Build topic views
+  auditLogger.logAgentAction("topic-view-builder", "started");
   const topics = buildTopicViews(comments, extractions, summary, options.collapseCampaigns ?? true);
+  auditLogger.logMetric("topic-view-builder", "topic-views-created", topics.length, {
+    topicIds: topics.map(t => t.topicId)
+  });
+  auditLogger.logAgentAction("topic-view-builder", "completed");
 
   const stageTimings = [
     { label: "Ingest", detail: `${comments.length.toLocaleString()} comments loaded` },

@@ -408,22 +408,49 @@ export const OFFICIAL_SOURCES = [
   },
 ];
 
-export const SAMPLE_DOCKETS = [
+// Simulated data sources - synthetic datasets for testing and demonstration
+export const SIMULATED_DOCKETS = [
   {
     id: "EPA-HQ-OW-2022-0801",
-    label: "Lead and Copper Rule Improvements",
-    helper: "EPA lead in drinking water",
+    label: "EPA: Lead and Copper Rule Improvements",
+    description: "Synthetic comment analysis dataset aligned to real EPA docket",
+    commentCount: 2110,
+    hasSimulatedData: true,
+    campaigns: CAMPAIGNS,
+    profiles: UNIQUE_PROFILES,
+  },
+];
+
+// Real data sources - live from Regulations.gov API
+export const REAL_DOCKETS = [
+  {
+    id: "FAA-2026-2295",
+    label: "FAA: Boeing 787 Airworthiness Directives",
+    description: "Live docket from Regulations.gov",
+    agency: "FAA",
   },
   {
-    id: "FAA-2018-1084",
-    label: "FAA API docs example",
-    helper: "Public Regulations.gov API sample",
+    id: "FMCSA-2014-0215",
+    label: "FMCSA: Driver Exemptions - Epilepsy",
+    description: "Live docket from Regulations.gov",
+    agency: "FMCSA",
   },
-  {
-    id: "EOIR-2020-0003",
-    label: "EOIR API docs example",
-    helper: "Large public comment example from API docs",
-  },
+];
+
+// Combined catalog for UI display
+export const SAMPLE_DOCKETS = [
+  ...SIMULATED_DOCKETS.map(d => ({
+    ...d,
+    dataType: "simulated",
+    badge: "🔵",
+    commentCount: `${d.commentCount.toLocaleString()} (synthetic)`,
+  })),
+  ...REAL_DOCKETS.map(d => ({
+    ...d,
+    dataType: "real",
+    badge: "🟢",
+    commentCount: "Live from API",
+  })),
 ];
 
 export const TIMELINE_STEPS = [

@@ -1,3 +1,6 @@
 output/
 .DS_Store
 *.log
+.env
+src/config.local.mjs
+node_modules/

@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI Agents - DocketIQ</title>
+  <link rel="stylesheet" href="./src/styles.css">
+  <style>
+    .agents-page {
+      max-width: 1400px;
+      margin: 0 auto;
+      padding: 2rem;
+    }
+    .page-header {
+      text-align: center;
+      margin-bottom: 3rem;
+    }
+    .page-header h1 {
+      font-size: 3rem;
+      margin-bottom: 1rem;
+    }
+    .page-header p {
+      font-size: 1.2rem;
+      color: var(--ink-soft);
+    }
+    .back-link {
+      display: inline-block;
+      margin-bottom: 2rem;
+      color: var(--signal);
+      text-decoration: none;
+      font-weight: 600;
+    }
+    .back-link:hover {
+      text-decoration: underline;
+    }
+    .agent-type-section {
+      margin-bottom: 3rem;
+    }
+    .agent-type-header {
+      border-left: 4px solid;
+      padding-left: 1rem;
+      margin-bottom: 1.5rem;
+    }
+    .agent-type-header h2 {
+      margin: 0 0 0.5rem 0;
+      font-size: 1.8rem;
+    }
+    .agent-cards-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(500px, 1fr));
+      gap: 2rem;
+      margin-bottom: 2rem;
+    }
+    .agent-card-full {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-left: 4px solid;
+      border-radius: 0.75rem;
+      padding: 2rem;
+    }
+    .agent-card-full h3 {
+      margin: 0 0 0.5rem 0;
+      font-size: 1.5rem;
+    }
+    .agent-card-full .agent-model {
+      color: var(--ink-soft);
+      font-size: 0.9rem;
+      margin-bottom: 1.5rem;
+    }
+    .agent-section {
+      margin: 1.5rem 0;
+    }
+    .agent-section h4 {
+      margin: 0 0 0.75rem 0;
+      font-size: 1.1rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    .agent-prompt {
+      background: var(--panel-alt);
+      padding: 1rem;
+      border-radius: 0.5rem;
+      font-family: var(--font-mono);
+      font-size: 0.9rem;
+      line-height: 1.6;
+      border-left: 3px solid var(--signal);
+    }
+    .capability-list {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+    }
+    .capability-list li {
+      padding: 0.5rem 0;
+      display: flex;
+      align-items: flex-start;
+      gap: 0.75rem;
+    }
+    .capability-icon {
+      flex-shrink: 0;
+      width: 20px;
+      height: 20px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 50%;
+      font-weight: bold;
+      font-size: 0.9rem;
+    }
+    .capability-can .capability-icon {
+      background: var(--signal-soft);
+      color: var(--signal);
+    }
+    .capability-cannot .capability-icon {
+      background: rgba(239, 68, 68, 0.1);
+      color: #ef4444;
+    }
+    .agent-meta {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 1rem;
+      margin-top: 1.5rem;
+      padding-top: 1.5rem;
+      border-top: 1px solid var(--line);
+    }
+    .agent-meta-item {
+      font-size: 0.9rem;
+    }
+    .agent-meta-item strong {
+      display: block;
+      margin-bottom: 0.25rem;
+      color: var(--ink-soft);
+    }
+  </style>
+</head>
+<body>
+  <div class="app-shell">
+    <div class="ambient ambient-a"></div>
+    <div class="ambient ambient-b"></div>
+    <main class="app-root agents-page">
+      <a href="/" class="back-link">← Back to DocketIQ</a>
+
+      <div class="page-header">
+        <h1>🤖 AI Agents</h1>
+        <p>DocketIQ uses <span id="agent-count">16</span> specialized AI agents, each with specific capabilities and limitations.</p>
+      </div>
+
+      <div id="agents-container">
+        <p style="text-align: center; color: var(--ink-soft);">Loading agents...</p>
+      </div>
+    </main>
+  </div>
+
+  <script type="module">
+    import { AGENT_REGISTRY, AGENT_TYPES, getAgentById } from './src/agents.mjs';
+
+    function escapeHtml(text) {
+      const div = document.createElement('div');
+      div.textContent = text;
+      return div.innerHTML;
+    }
+
+    function getAgentLimitations(agentId) {
+      const limitations = {
+        "docket-fetcher": ["Modify docket data", "Delete records", "Create new dockets"],
+        "document-fetcher": ["Parse PDF content", "Extract text from images", "Modify documents"],
+        "comment-fetcher": ["Filter by sentiment", "Modify comments", "Create fake comments"],
+        "attachment-processor": ["Scan file contents", "Extract text from PDFs", "Virus scan files"],
+        "comment-normalizer": ["Understand sarcasm perfectly", "Detect all duplicates", "Translate languages"],
+        "duplicate-detector": ["Detect sophisticated astroturfing", "Identify all form letters with 100% accuracy", "Merge different campaigns automatically"],
+        "topic-classifier": ["Create new topics", "Understand context outside training data", "Classify ambiguous text perfectly"],
+        "argument-extractor": ["Evaluate argument validity", "Detect logical fallacies", "Generate counterarguments"],
+        "entity-recognizer": ["Identify all entities with 100% accuracy", "Verify organization legitimacy", "Access private databases"],
+        "sentiment-scorer": ["Understand complex emotions", "Detect subtle sarcasm", "Score mixed sentiments with certainty"],
+        "authority-scorer": ["Verify credentials", "Access private databases", "Make legal determinations"],
+        "graph-builder": ["Create causal relationships", "Prove correlations", "Infer unstated connections"],
+        "summary-generator": ["Make policy decisions", "Choose between alternatives", "Override analyst judgment"],
+        "topic-view-builder": ["Filter based on politics", "Hide dissenting views", "Bias topic ranking"],
+        "recommendation-engine": ["Make final decisions", "Override human judgment", "Guarantee outcomes"],
+        "plain-language-translator": ["Guarantee perfect accuracy", "Replace legal review", "Make binding interpretations"],
+        "heatmap-generator": ["Determine comment quality", "Predict policy outcomes", "Weight comments by engagement"],
+        "timeline-analyzer": ["Prove coordination", "Identify specific organizers", "Determine campaign legality"],
+        "fraud-detector": ["Guarantee 100% accuracy", "Replace human verification", "Make legal determinations about fraud"],
+      };
+      return limitations[agentId] || ["Make autonomous decisions", "Access restricted data", "Override human oversight"];
+    }
+
+    function renderAgents() {
+      const agentsByType = {};
+      AGENT_REGISTRY.forEach(agent => {
+        if (!agentsByType[agent.type]) {
+          agentsByType[agent.type] = [];
+        }
+        agentsByType[agent.type].push(agent);
+      });
+
+      document.getElementById('agent-count').textContent = AGENT_REGISTRY.length;
+
+      const html = Object.keys(AGENT_TYPES).map(typeKey => {
+        const type = AGENT_TYPES[typeKey];
+        const agents = agentsByType[typeKey] || [];
+        if (agents.length === 0) return '';
+
+        return `
+          <div class="agent-type-section">
+            <div class="agent-type-header" style="border-left-color: ${type.color}">
+              <h2 style="color: ${type.color}">${type.label}</h2>
+              <p>${type.description}</p>
+            </div>
+            <div class="agent-cards-grid">
+              ${agents.map(agent => `
+                <div class="agent-card-full" style="border-left-color: ${type.color}">
+                  <h3>${escapeHtml(agent.name)}</h3>
+                  <div class="agent-model">${escapeHtml(agent.model)}</div>
+
+                  <div class="agent-section">
+                    <h4>💬 System Prompt</h4>
+                    <div class="agent-prompt">${escapeHtml(agent.prompt)}</div>
+                  </div>
+
+                  <div class="agent-section">
+                    <h4>🎯 Capabilities</h4>
+                    <ul class="capability-list capability-can">
+                      ${agent.skills.map(skill => `
+                        <li>
+                          <span class="capability-icon">✓</span>
+                          <span>${escapeHtml(skill)}</span>
+                        </li>
+                      `).join('')}
+                    </ul>
+                  </div>
+
+                  <div class="agent-section">
+                    <h4>🚫 Limitations</h4>
+                    <ul class="capability-list capability-cannot">
+                      ${getAgentLimitations(agent.id).map(limit => `
+                        <li>
+                          <span class="capability-icon">✗</span>
+                          <span>${escapeHtml(limit)}</span>
+                        </li>
+                      `).join('')}
+                    </ul>
+                  </div>
+
+                  ${agent.implementation ? `
+                    <div class="agent-meta">
+                      <div class="agent-meta-item">
+                        <strong>Implementation</strong>
+                        <div>${escapeHtml(agent.implementation.file)}</div>
+                        <div>${escapeHtml(agent.implementation.function)}</div>
+                      </div>
+                      <div class="agent-meta-item">
+                        <strong>Status</strong>
+                        <div>${escapeHtml(agent.implementation.status)}</div>
+                      </div>
+                    </div>
+                  ` : ''}
+                </div>
+              `).join('')}
+            </div>
+          </div>
+        `;
+      }).join('');
+
+      document.getElementById('agents-container').innerHTML = html;
+    }
+
+    // Render on load
+    renderAgents();
+  </script>
+</body>
+</html>
